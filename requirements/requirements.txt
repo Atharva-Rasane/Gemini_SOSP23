@@ -1,6 +1,6 @@
 hjson
 ninja
-numpy
+numpy==1.23.5
 packaging
 psutil
 py-cpuinfo
