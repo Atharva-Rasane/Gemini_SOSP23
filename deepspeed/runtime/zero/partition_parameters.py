@@ -476,6 +476,9 @@ class AllGatherHandle:
         self.__handle = handle
         self.__param = param
 
+    def get_handle(self):
+        return self.__handle
+
     def wait(self) -> None:
         instrument_w_nvtx(self.__handle.wait)()
         self.__param.ds_status = ZeroParamStatus.AVAILABLE
@@ -499,6 +502,9 @@ class AllGatherCoalescedHandle:
             if param.ds_status != ZeroParamStatus.INFLIGHT:
                 raise RuntimeError(
                     f"expected param {param.ds_summary()} to not be available")
+
+    def get_handle(self):
+        return self.__allgather_handle
     
     @instrument_w_nvtx
     def wait(self) -> None:

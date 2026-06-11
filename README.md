@@ -19,6 +19,100 @@ Minimum tested versions:
 - Git, Python 3, pip, OpenSSH, Docker, and build tools
 - OS: Linux and other OS supported by DeepSpeed
 
+### Install prerequisites on a blank Ubuntu/Debian VM
+
+Run this on each VM before cloning or running the artifact. The VM must be a GPU VM with NVIDIA drivers installed; `nvidia-smi` must show at least one GPU.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential \
+  git \
+  python3-dev \
+  python3-pip \
+  python3-venv \
+  openssh-client \
+  openssh-server \
+  docker.io \
+  pdsh
+
+sudo systemctl enable --now ssh
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+```
+
+Log out and back in after adding the user to the `docker` group, or keep using `sudo docker` in the current shell.
+
+Verify GPU and driver visibility:
+
+```bash
+nvidia-smi
+```
+
+Install the minimum Python package versions used by this artifact:
+
+```bash
+python3 -m pip install --upgrade pip
+python3 -m pip uninstall -y torch torchvision torchaudio numpy pydantic deepspeed
+python3 -m pip install \
+  torch==1.13.0+cu116 \
+  torchvision==0.14.0+cu116 \
+  torchaudio==0.13.0 \
+  --extra-index-url https://download.pytorch.org/whl/cu116
+python3 -m pip install numpy==1.23.5 pydantic==1.10.13 transformers==4.24.0 boto3
+```
+
+After cloning this repository, install the artifact itself:
+
+```bash
+python3 -m pip install -r requirements/requirements.txt
+python3 -m pip install -e .
+export PATH="$HOME/.local/bin:$PATH"
+export PYTHONPATH="$PWD:$PYTHONPATH"
+```
+
+Verify the installed versions:
+
+```bash
+python3 - <<'PY'
+import torch, deepspeed, numpy, pydantic
+print("torch", torch.__version__)
+print("torch cuda", torch.version.cuda)
+print("cuda available", torch.cuda.is_available())
+print("gpu count", torch.cuda.device_count())
+print("nccl", torch.cuda.nccl.version())
+print("deepspeed", deepspeed.__version__)
+print("numpy", numpy.__version__)
+print("pydantic", pydantic.__version__)
+PY
+```
+
+Start etcd 3.5 with Docker on the VM that will host etcd:
+
+```bash
+export VM1_PRIVATE_IP=$(hostname -I | awk '{print $1}')
+export ETCD_VERSION=v3.5.0
+
+sudo docker rm -f etcd_container || true
+sudo docker volume create --name etcd-data
+sudo docker run --rm -d \
+  -p 2379:2379 -p 2380:2380 \
+  -v etcd-data:/etcd-data \
+  --name etcd_container \
+  gcr.io/etcd-development/etcd:${ETCD_VERSION} \
+  /usr/local/bin/etcd --data-dir=/etcd-data --name etcd-node-0 \
+  --enable-v2=true \
+  --initial-advertise-peer-urls http://${VM1_PRIVATE_IP}:2380 \
+  --listen-peer-urls http://0.0.0.0:2380 \
+  --advertise-client-urls http://${VM1_PRIVATE_IP}:2379 \
+  --listen-client-urls http://0.0.0.0:2379 \
+  --initial-cluster etcd-node-0=http://${VM1_PRIVATE_IP}:2380 \
+  --initial-cluster-state new \
+  --initial-cluster-token my-etcd-token
+
+sudo docker exec etcd_container /usr/local/bin/etcdctl endpoint health
+```
+
 ## Machines
 
 **Machines used in the paper:** All the experiments in the main body of our paper are conducted on 16 AWS p4d.24xlarge instances with 128 A100 GPUs. The number of parameters in the evaluated models is 100 billion.
