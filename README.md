@@ -59,7 +59,7 @@ python3 -m pip install \
   torchvision==0.14.0+cu116 \
   torchaudio==0.13.0 \
   --extra-index-url https://download.pytorch.org/whl/cu116
-python3 -m pip install numpy==1.23.5 pydantic==1.10.13 transformers==4.24.0 boto3
+python3 -m pip install numpy==1.23.5 pydantic==1.10.13 matplotlib==3.7.5 transformers==4.24.0 boto3
 ```
 
 After cloning this repository, install the artifact itself:

@@ -1,4 +1,5 @@
 hjson
+matplotlib==3.7.5
 ninja
 numpy==1.23.5
 packaging
