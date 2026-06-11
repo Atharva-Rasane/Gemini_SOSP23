@@ -3,7 +3,7 @@
 HOSTFILE="../hostfile"
 TRAIN_SCRIPT=pretrain_gpt.py
 TRAIN_CONFIG="
-5B_template.json
+tiny_gpt_template.json
 "
 
 JOB_NAME=GPT2
@@ -38,4 +38,4 @@ ${deepspeed} --hostfile=${HOSTFILE} ${TRAIN_SCRIPT} \
 "
 
 echo $ds_cmd
-eval $ds_cmd | tee log_5B
+eval $ds_cmd | tee log_Tiny

@@ -207,30 +207,22 @@ cd ~/zhuang/Gemini/examples/GPT
 bash launch.sh
 ```
 
-For a quick distributed smoke test with the smallest GPT config, run the training script directly with `tiny_gpt_template.json`:
+For a quick distributed smoke test with the smallest GPT config, run `launch.sh` with overrides:
 
 ```bash
 cd ~/zhuang/Gemini/examples/GPT
-deepspeed --hostfile=../hostfile pretrain_gpt.py \
-  --deepspeed \
-  --deepspeed_config tiny_gpt_template.json \
-  --job_name tiny_gpt \
-  --max_steps 5 \
-  --print_steps 1 \
-  --output . \
-  --comm_profile_steps 3 \
-  --jump_profile_lines 1 \
-  --enable_comm_profile \
-  --snapshot_mode interleave \
-  --network_bandwidth 80 \
-  --snapshot_buffer_size 1 \
-  --span_threshold 100 \
-  --span_alpha 0.8 \
-  --max_blocks_in_span 1 \
-  --save_to_disk
+TRAIN_CONFIG=tiny_gpt_template.json \
+JOB_NAME=tiny_gpt \
+MAX_STEPS=5 \
+COMM_PROFILE_STEPS=3 \
+JUMP_PROFILE_LINES=1 \
+SNAPSHOT_BUFFER_SIZE=1 \
+MAX_BLOCKS_IN_SPAN=1 \
+LOG_FILE=log_tiny_gpt \
+bash launch.sh
 ```
 
-The tiny config keeps the same training path and ZeRO stage as the larger GPT configs, but uses the smallest GPT dimensions that still work with the 512-token fake dataset and GPT-2 tokenizer.
+`examples/GPT/launch.sh` defaults to `5B_template.json`, so `bash launch.sh` still runs the original GPT experiment. The tiny config keeps the same training path and ZeRO stage as the larger GPT configs, but uses the smallest GPT dimensions that still work with the 512-token fake dataset and GPT-2 tokenizer.
 
 ## Code Structure
 
