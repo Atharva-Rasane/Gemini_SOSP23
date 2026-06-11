@@ -315,7 +315,7 @@ cd ~/SOSP-30_AE
 bash examples/GPT/launch.sh
 ```
 
-`examples/GPT/launch.sh` defaults to `tiny_gpt_template.json` and can be run from either the repository root or `examples/GPT`. To run the larger 5B GPT config instead, pass overrides:
+`examples/GPT/launch.sh` defaults to `tiny_gpt_template.json`, runs 30 steps, and can be run from either the repository root or `examples/GPT`. The tiny config uses a low initial fp16 loss scale so the run reaches the interleave profiling and snapshot strategy path. To run the larger 5B GPT config instead, pass overrides:
 
 ```bash
 cd ~/SOSP-30_AE

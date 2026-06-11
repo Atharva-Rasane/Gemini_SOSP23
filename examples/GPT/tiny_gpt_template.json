@@ -33,7 +33,7 @@
     "fp16": {
         "enabled": true,
         "loss_scale": 0,
-        "initial_scale_power": 20,
+        "initial_scale_power": 1,
         "loss_scale_window": 1000
     }
 }
