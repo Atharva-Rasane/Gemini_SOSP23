@@ -14,6 +14,7 @@ This repository contains the system code and scripts that help run the experimen
 - NCCL >= 2.14.3
 - etcd == 3.5
 - Auto Scaling Group in AWS
+- Git, Python 3, pip, OpenSSH, Docker, and build tools
 - OS: Linux and other OS supported by DeepSpeed
 
 ## Machines
@@ -35,11 +36,36 @@ The code needs to be installed at the exact same path on all machines.
 
 If AEC members directly use our machines for the evaluation, we will have all dependencies pre-installed on all machines.
 
+On a blank VM, install the basic tools before running `git clone`.
+
+Ubuntu/Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential git python3-dev python3-pip python3-venv openssh-client openssh-server docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+```
+
+Amazon Linux:
+
+```bash
+sudo yum update -y
+sudo yum groupinstall -y "Development Tools"
+sudo yum install -y git python3 python3-devel python3-pip openssh-clients openssh-server docker
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+```
+
+Log out and back in after adding the user to the `docker` group. Then clone and install the artifact:
+
 ```bash
 git clone https://github.com/zhuangwang93/SOSP-30_AE.git
 cd SOSP-30_AE
-pip3 install -e .
-pip3 install transformers -U 
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements/requirements.txt
+python3 -m pip install transformers boto3
+python3 -m pip install -e .
 ```
 
 ## Two-VM distributed setup
@@ -74,11 +100,24 @@ If you use private IPs, make sure the VMs are in the same network/security group
 
 ### 2. Download system requirements
 
-Install CUDA 11.6, a PyTorch build compatible with CUDA 11.6, NCCL 2.14.3 or newer, Docker, Git, Python development headers, and build tools on both VMs. The exact package names vary by Linux distribution, but the Ubuntu package baseline is:
+Install CUDA 11.6, a PyTorch build compatible with CUDA 11.6, and NCCL 2.14.3 or newer on both VMs. If you did not already run the blank-VM bootstrap commands above, install Git, Python, SSH, Docker, and build tools now.
+
+Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y build-essential git python3-dev python3-pip python3-venv openssh-client openssh-server docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
+```
+
+Amazon Linux:
+
+```bash
+sudo yum update -y
+sudo yum groupinstall -y "Development Tools"
+sudo yum install -y git python3 python3-devel python3-pip openssh-clients openssh-server docker
+sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 ```
 
