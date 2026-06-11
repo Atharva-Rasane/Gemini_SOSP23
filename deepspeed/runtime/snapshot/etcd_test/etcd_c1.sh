@@ -3,7 +3,7 @@ REGISTRY=quay.io/coreos/etcd
 REGISTRY=gcr.io/etcd-development/etcd
 
 # For each machine
-ETCD_VERSION=v3.5.21
+ETCD_VERSION=v3.5.0
 TOKEN=my-etcd-token
 CLUSTER_STATE=new
 NAME_1=etcd-node-0

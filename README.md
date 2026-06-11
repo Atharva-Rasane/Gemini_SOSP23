@@ -8,11 +8,13 @@ This repository contains the system code and scripts that help run the experimen
 
 ## Prerequisites
 
-- DeepSpeed == 0.73
+Minimum tested versions:
+
+- DeepSpeed == 0.7.3
 - CUDA == 11.6
-- PyTorch >= 1.13.0
-- NCCL >= 2.14.3
-- etcd == 3.5
+- PyTorch == 1.13.0+cu116
+- NCCL == 2.14.3
+- etcd == 3.5.0
 - Auto Scaling Group in AWS
 - Git, Python 3, pip, OpenSSH, Docker, and build tools
 - OS: Linux and other OS supported by DeepSpeed
@@ -63,8 +65,9 @@ Log out and back in after adding the user to the `docker` group. Then clone and 
 git clone https://github.com/zhuangwang93/SOSP-30_AE.git
 cd SOSP-30_AE
 python3 -m pip install --upgrade pip
+python3 -m pip install torch==1.13.0+cu116 --extra-index-url https://download.pytorch.org/whl/cu116
 python3 -m pip install -r requirements/requirements.txt
-python3 -m pip install transformers boto3
+python3 -m pip install transformers==4.24.0 boto3
 python3 -m pip install -e .
 export PATH="$HOME/.local/bin:$PATH"
 ```
@@ -101,7 +104,7 @@ If you use private IPs, make sure the VMs are in the same network/security group
 
 ### 2. Download system requirements
 
-Install CUDA 11.6, a PyTorch build compatible with CUDA 11.6, and NCCL 2.14.3 or newer on both VMs. If you did not already run the blank-VM bootstrap commands above, install Git, Python, SSH, Docker, and build tools now.
+Install CUDA 11.6, PyTorch 1.13.0 with the CUDA 11.6 wheel, and NCCL 2.14.3 on both VMs. If you did not already run the blank-VM bootstrap commands above, install Git, Python, SSH, Docker, and build tools now.
 
 Ubuntu/Debian:
 
@@ -134,8 +137,9 @@ cd ~/zhuang
 git clone https://github.com/zhuangwang93/SOSP-30_AE.git Gemini
 cd Gemini
 python3 -m pip install --upgrade pip
+python3 -m pip install torch==1.13.0+cu116 --extra-index-url https://download.pytorch.org/whl/cu116
 python3 -m pip install -r requirements/requirements.txt
-python3 -m pip install transformers boto3
+python3 -m pip install transformers==4.24.0 boto3
 python3 -m pip install -e .
 export PATH="$HOME/.local/bin:$PATH"
 ds_report
@@ -179,7 +183,7 @@ Choose one VM to host etcd. On that VM, replace `VM1_PRIVATE_IP` with the privat
 ```bash
 # Replace this with the private IP of the VM that will run etcd.
 export VM1_PRIVATE_IP=10.0.0.10
-export ETCD_VERSION=v3.5.21
+export ETCD_VERSION=v3.5.0
 
 sudo docker rm -f etcd_container || true
 sudo docker volume create --name etcd-data

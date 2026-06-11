@@ -76,8 +76,10 @@ def setup_instances(ips_list):
     gemini_dir = os.path.join(os.path.expanduser('~'), "zhuang/Gemini")
     for ip in ips_list:
         setup_command = f"""
-            cd {gemini_dir}; pip3 install -e .; 
-            pip3 install transformers -U; 
+            cd {gemini_dir};
+            pip3 install torch==1.13.0+cu116 --extra-index-url https://download.pytorch.org/whl/cu116;
+            pip3 install -e .;
+            pip3 install transformers==4.24.0 boto3;
             mkdir /tmp/ramdisk; 
             sudo mount -t tmpfs -o size=128G ramdisk /tmp/ramdisk; mount | tail -n 1
         """

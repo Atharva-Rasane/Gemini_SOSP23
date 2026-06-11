@@ -56,7 +56,7 @@ class TraingLaunch():
 
     def start_etcd(self, num):
         REGISTRY = "gcr.io/etcd-development/etcd"
-        ETCD_VERSION = os.environ.get("ETCD_VERSION", "v3.5.21")
+        ETCD_VERSION = os.environ.get("ETCD_VERSION", "v3.5.0")
         TOKEN = "my-etcd-token"
         CLUSTER_STATE="new"
         names = ["etcd-node-"+str(i) for i in range(num)]
@@ -90,7 +90,7 @@ class TraingLaunch():
 
     def start_etcd_from_ips(self, ips):
         REGISTRY = "gcr.io/etcd-development/etcd"
-        ETCD_VERSION = os.environ.get("ETCD_VERSION", "v3.5.21")
+        ETCD_VERSION = os.environ.get("ETCD_VERSION", "v3.5.0")
         TOKEN = "my-etcd-token"
         CLUSTER_STATE="new"
         ips = ips.strip().split(" ")
