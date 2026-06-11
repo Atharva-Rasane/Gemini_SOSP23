@@ -172,23 +172,31 @@ python3 launch.py -m instances -i 2 -g 8 -e ~/zhuang/Gemini/examples
 
 ### 5. Start etcd
 
-Choose one VM to host etcd. On that VM, replace `VM1_PRIVATE_IP` with the private IP of the etcd VM:
+Choose one VM to host etcd. On that VM, replace `VM1_PRIVATE_IP` with the private IP of the etcd VM. Use `sudo docker` unless you have already added your user to the `docker` group and opened a new login shell.
 
 ```bash
-docker volume create --name etcd-data
-docker run --rm -d \
+# Replace this with the private IP of the VM that will run etcd.
+export VM1_PRIVATE_IP=10.0.0.10
+export ETCD_VERSION=v3.5.21
+
+sudo docker rm -f etcd_container || true
+sudo docker volume create --name etcd-data
+sudo docker run --rm -d \
   -p 2379:2379 -p 2380:2380 \
   -v etcd-data:/etcd-data \
   --name etcd_container \
-  gcr.io/etcd-development/etcd:latest \
-  etcd --data-dir=/etcd-data --name etcd-node-0 \
-  --initial-advertise-peer-urls http://VM1_PRIVATE_IP:2380 \
+  gcr.io/etcd-development/etcd:${ETCD_VERSION} \
+  /usr/local/bin/etcd --data-dir=/etcd-data --name etcd-node-0 \
+  --enable-v2=true \
+  --initial-advertise-peer-urls http://${VM1_PRIVATE_IP}:2380 \
   --listen-peer-urls http://0.0.0.0:2380 \
-  --advertise-client-urls http://VM1_PRIVATE_IP:2379 \
+  --advertise-client-urls http://${VM1_PRIVATE_IP}:2379 \
   --listen-client-urls http://0.0.0.0:2379 \
-  --initial-cluster etcd-node-0=http://VM1_PRIVATE_IP:2380 \
+  --initial-cluster etcd-node-0=http://${VM1_PRIVATE_IP}:2380 \
   --initial-cluster-state new \
   --initial-cluster-token my-etcd-token
+
+sudo docker exec etcd_container /usr/local/bin/etcdctl endpoint health
 ```
 
 For ASG-based runs, the launcher can start etcd over SSH:

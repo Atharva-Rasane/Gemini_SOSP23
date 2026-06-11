@@ -56,7 +56,7 @@ class TraingLaunch():
 
     def start_etcd(self, num):
         REGISTRY = "gcr.io/etcd-development/etcd"
-        ETCD_VERSION = "latest"
+        ETCD_VERSION = os.environ.get("ETCD_VERSION", "v3.5.21")
         TOKEN = "my-etcd-token"
         CLUSTER_STATE="new"
         names = ["etcd-node-"+str(i) for i in range(num)]
@@ -74,7 +74,8 @@ class TraingLaunch():
                 docker volume create --name {DATA_DIR}; \
                 docker run --rm -d -p 2379:2379 -p 2380:2380 -v {DATA_DIR}:/etcd-data \
                     --name etcd_container {REGISTRY}:{ETCD_VERSION} \
-                    etcd --data-dir=/etcd-data --name {THIS_NAME} \
+                    /usr/local/bin/etcd --data-dir=/etcd-data --name {THIS_NAME} \
+                    --enable-v2=true \
                     --initial-advertise-peer-urls http://{THIS_IP}:2380 --listen-peer-urls http://0.0.0.0:2380 \
                     --advertise-client-urls http://{THIS_IP}:{self.etcd_port} --listen-client-urls http://0.0.0.0:{self.etcd_port} \
                     --initial-cluster {CLUSTER} \
@@ -89,7 +90,7 @@ class TraingLaunch():
 
     def start_etcd_from_ips(self, ips):
         REGISTRY = "gcr.io/etcd-development/etcd"
-        ETCD_VERSION = "latest"
+        ETCD_VERSION = os.environ.get("ETCD_VERSION", "v3.5.21")
         TOKEN = "my-etcd-token"
         CLUSTER_STATE="new"
         ips = ips.strip().split(" ")
@@ -109,7 +110,8 @@ class TraingLaunch():
                 docker volume create --name {DATA_DIR}; \
                 docker run --rm -d -p 2379:2379 -p 2380:2380 -v {DATA_DIR}:/etcd-data \
                     --name etcd_container {REGISTRY}:{ETCD_VERSION} \
-                    etcd --data-dir=/etcd-data --name {THIS_NAME} \
+                    /usr/local/bin/etcd --data-dir=/etcd-data --name {THIS_NAME} \
+                    --enable-v2=true \
                     --initial-advertise-peer-urls http://{THIS_IP}:2380 --listen-peer-urls http://0.0.0.0:2380 \
                     --advertise-client-urls http://{THIS_IP}:{self.etcd_port} --listen-client-urls http://0.0.0.0:{self.etcd_port} \
                     --initial-cluster {CLUSTER} \

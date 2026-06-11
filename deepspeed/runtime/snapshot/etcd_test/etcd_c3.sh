@@ -3,7 +3,7 @@ REGISTRY=quay.io/coreos/etcd
 REGISTRY=gcr.io/etcd-development/etcd
 
 # For each machine
-ETCD_VERSION=latest
+ETCD_VERSION=v3.5.21
 TOKEN=my-etcd-token
 CLUSTER_STATE=new
 NAME_1=etcd-node-0
@@ -28,6 +28,7 @@ docker run --rm -d \
   --name etcd_container3 ${REGISTRY}:${ETCD_VERSION} \
   /usr/local/bin/etcd \
   --data-dir=/etcd-data --name ${THIS_NAME} \
+  --enable-v2=true \
   --initial-advertise-peer-urls http://${THIS_IP}:2380 --listen-peer-urls http://0.0.0.0:2380 \
   --advertise-client-urls http://${THIS_IP}:2379 --listen-client-urls http://0.0.0.0:2379 \
   --initial-cluster ${CLUSTER} \
