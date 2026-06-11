@@ -42,7 +42,7 @@ Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential git python3-dev python3-pip python3-venv openssh-client openssh-server docker.io
+sudo apt-get install -y build-essential git python3-dev python3-pip python3-venv openssh-client openssh-server docker.io pdsh
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 ```
@@ -52,7 +52,7 @@ Amazon Linux:
 ```bash
 sudo yum update -y
 sudo yum groupinstall -y "Development Tools"
-sudo yum install -y git python3 python3-devel python3-pip openssh-clients openssh-server docker
+sudo yum install -y git python3 python3-devel python3-pip openssh-clients openssh-server docker pdsh
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 ```
@@ -66,6 +66,7 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements/requirements.txt
 python3 -m pip install transformers boto3
 python3 -m pip install -e .
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## Two-VM distributed setup
@@ -106,7 +107,7 @@ Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential git python3-dev python3-pip python3-venv openssh-client openssh-server docker.io
+sudo apt-get install -y build-essential git python3-dev python3-pip python3-venv openssh-client openssh-server docker.io pdsh
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 ```
@@ -116,7 +117,7 @@ Amazon Linux:
 ```bash
 sudo yum update -y
 sudo yum groupinstall -y "Development Tools"
-sudo yum install -y git python3 python3-devel python3-pip openssh-clients openssh-server docker
+sudo yum install -y git python3 python3-devel python3-pip openssh-clients openssh-server docker pdsh
 sudo systemctl enable --now docker
 sudo usermod -aG docker $USER
 ```
@@ -136,6 +137,7 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements/requirements.txt
 python3 -m pip install transformers boto3
 python3 -m pip install -e .
+export PATH="$HOME/.local/bin:$PATH"
 ds_report
 ```
 
@@ -208,29 +210,29 @@ python3 launch.py -m etcd -i 2 -c 1
 
 ### 6. Run distributed GPT training
 
-From VM 1:
+From VM 1, run the tiny GPT distributed smoke test:
 
 ```bash
-cd ~/zhuang/Gemini/examples/GPT
-bash launch.sh
+cd ~/SOSP-30_AE
+bash examples/GPT/launch.sh
 ```
 
-For a quick distributed smoke test with the smallest GPT config, run `launch.sh` with overrides:
+`examples/GPT/launch.sh` defaults to `tiny_gpt_template.json` and can be run from either the repository root or `examples/GPT`. To run the larger 5B GPT config instead, pass overrides:
 
 ```bash
-cd ~/zhuang/Gemini/examples/GPT
-TRAIN_CONFIG=tiny_gpt_template.json \
-JOB_NAME=tiny_gpt \
-MAX_STEPS=5 \
-COMM_PROFILE_STEPS=3 \
-JUMP_PROFILE_LINES=1 \
-SNAPSHOT_BUFFER_SIZE=1 \
-MAX_BLOCKS_IN_SPAN=1 \
-LOG_FILE=log_tiny_gpt \
-bash launch.sh
+cd ~/SOSP-30_AE
+TRAIN_CONFIG=5B_template.json \
+JOB_NAME=GPT2 \
+MAX_STEPS=30 \
+COMM_PROFILE_STEPS=18 \
+JUMP_PROFILE_LINES=8 \
+SNAPSHOT_BUFFER_SIZE=32 \
+MAX_BLOCKS_IN_SPAN=16 \
+LOG_FILE=log_5B \
+bash examples/GPT/launch.sh
 ```
 
-`examples/GPT/launch.sh` defaults to `5B_template.json`, so `bash launch.sh` still runs the original GPT experiment. The tiny config keeps the same training path and ZeRO stage as the larger GPT configs, but uses the smallest GPT dimensions that still work with the 512-token fake dataset and GPT-2 tokenizer.
+The tiny config keeps the same training path and ZeRO stage as the larger GPT configs, but uses the smallest GPT dimensions that still work with the 512-token fake dataset and GPT-2 tokenizer.
 
 ## Code Structure
 

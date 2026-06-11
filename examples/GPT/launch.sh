@@ -1,41 +1,71 @@
 #!/bin/bash
 
-HOSTFILE="../hostfile"
-TRAIN_SCRIPT=pretrain_gpt.py
-TRAIN_CONFIG="
-tiny_gpt_template.json
-"
+set -e
 
-JOB_NAME=GPT2
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "${SCRIPT_DIR}"
+
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+export PATH="${HOME}/.local/bin:${PATH}"
+
+HOSTFILE="${HOSTFILE:-${SCRIPT_DIR}/../hostfile}"
+TRAIN_SCRIPT="${TRAIN_SCRIPT:-pretrain_gpt.py}"
+TRAIN_CONFIG="${TRAIN_CONFIG:-tiny_gpt_template.json}"
+
+JOB_NAME="${JOB_NAME:-tiny_gpt}"
 OUTPUT_DIR="./${JOB_NAME}"
+MAX_STEPS="${MAX_STEPS:-5}"
+PRINT_STEPS="${PRINT_STEPS:-1}"
+COMM_PROFILE_STEPS="${COMM_PROFILE_STEPS:-3}"
+JUMP_PROFILE_LINES="${JUMP_PROFILE_LINES:-1}"
+SNAPSHOT_MODE="${SNAPSHOT_MODE:-interleave}"
+NETWORK_BANDWIDTH="${NETWORK_BANDWIDTH:-80}"
+SNAPSHOT_BUFFER_SIZE="${SNAPSHOT_BUFFER_SIZE:-1}"
+SPAN_THRESHOLD="${SPAN_THRESHOLD:-100}"
+SPAN_ALPHA="${SPAN_ALPHA:-0.8}"
+MAX_BLOCKS_IN_SPAN="${MAX_BLOCKS_IN_SPAN:-1}"
+LOG_FILE="${LOG_FILE:-log_${JOB_NAME}}"
 
-common_args="\
- \
-"
+if [ -n "${DEEPSPEED_BIN:-}" ]; then
+    deepspeed="${DEEPSPEED_BIN}"
+elif command -v deepspeed >/dev/null 2>&1; then
+    deepspeed="$(command -v deepspeed)"
+elif command -v ds >/dev/null 2>&1; then
+    deepspeed="$(command -v ds)"
+elif python3 -c "import deepspeed" >/dev/null 2>&1; then
+    deepspeed="python3 -m deepspeed.launcher.runner"
+else
+    echo "DeepSpeed is not installed or importable. Run: python3 -m pip install -e ${REPO_ROOT}" >&2
+    exit 1
+fi
 
-deepspeed="/home/ec2-user/.local/bin/deepspeed"
+if [ ! -f "${HOSTFILE}" ]; then
+    echo "Hostfile not found: ${HOSTFILE}" >&2
+    echo "Create ${SCRIPT_DIR}/../hostfile or set HOSTFILE=/path/to/hostfile." >&2
+    exit 1
+fi
 
-# running cmd
 ds_cmd="\
 ${deepspeed} --hostfile=${HOSTFILE} ${TRAIN_SCRIPT} \
 --deepspeed \
 --deepspeed_config $TRAIN_CONFIG \
 --job_name ${JOB_NAME} \
---max_steps 30 \
---print_steps 1 \
+--max_steps ${MAX_STEPS} \
+--print_steps ${PRINT_STEPS} \
 --output . \
---comm_profile_steps 18 \
---jump_profile_lines 8 \
+--comm_profile_steps ${COMM_PROFILE_STEPS} \
+--jump_profile_lines ${JUMP_PROFILE_LINES} \
 --enable_comm_profile \
---snapshot_mode interleave \
---network_bandwidth 80 \
---snapshot_buffer_size 32 \
---span_threshold 100 \
---span_alpha 0.8 \
---max_blocks_in_span 16 \
+--snapshot_mode ${SNAPSHOT_MODE} \
+--network_bandwidth ${NETWORK_BANDWIDTH} \
+--snapshot_buffer_size ${SNAPSHOT_BUFFER_SIZE} \
+--span_threshold ${SPAN_THRESHOLD} \
+--span_alpha ${SPAN_ALPHA} \
+--max_blocks_in_span ${MAX_BLOCKS_IN_SPAN} \
 --save_to_disk \
 # --enable_snapshot_profile \
 "
 
 echo $ds_cmd
-eval $ds_cmd | tee log_Tiny
+eval $ds_cmd | tee ${LOG_FILE}
