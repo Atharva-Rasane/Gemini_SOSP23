@@ -11,6 +11,7 @@ but keeps DeepSpeed/distributed/checkpoint orchestration on the real code paths.
 
 import os
 import sys
+import importlib
 from contextlib import ExitStack, nullcontext
 from types import SimpleNamespace
 from unittest import mock
@@ -387,6 +388,32 @@ def _install_fakegpu():
     def _maybe_work(async_op):
         return FakeWork() if async_op else None
 
+    class FakeFusedAdamCuda:
+        def multi_tensor_adam(self, chunk_size, noop_flag_buffer, tensor_lists, *args):
+            # Keep FusedAdam.step() and ZeRO optimizer-state plumbing intact, but
+            # replace the CUDA Adam math with in-place garbage updates.
+            for tensor_group in tensor_lists[1:]:
+                for tensor in tensor_group:
+                    if torch.is_tensor(tensor):
+                        _copy_tensor(tensor, orig_empty_like(tensor))
+            return None
+
+    def _fake_cpp_extension_load(original_load):
+        def wrapped(name, *args, **kwargs):
+            if name == "fused_adam":
+                return FakeFusedAdamCuda()
+            return original_load(name, *args, **kwargs)
+
+        return wrapped
+
+    def _fake_import_module(original_import_module):
+        def wrapped(name, package=None):
+            if name.endswith(".fused_adam_op"):
+                return FakeFusedAdamCuda()
+            return original_import_module(name, package)
+
+        return wrapped
+
     def _cpu_dist_backend(backend):
         if backend is None:
             return "gloo"
@@ -583,6 +610,26 @@ def _install_fakegpu():
     stack.enter_context(mock.patch.object(torch.nn.Module, "cuda", _fake_module_cuda))
     stack.enter_context(mock.patch.object(torch.nn.Module, "to", _fake_module_to))
     stack.enter_context(mock.patch.object(torch, "load", _fake_torch_load))
+    stack.enter_context(
+        mock.patch.object(
+            importlib,
+            "import_module",
+            _fake_import_module(importlib.import_module),
+        )
+    )
+
+    try:
+        import torch.utils.cpp_extension as cpp_extension
+
+        stack.enter_context(
+            mock.patch.object(
+                cpp_extension,
+                "load",
+                _fake_cpp_extension_load(cpp_extension.load),
+            )
+        )
+    except Exception:
+        pass
 
     stack.enter_context(mock.patch.object(torch.nn.functional, "embedding", _fake_embedding))
     stack.enter_context(mock.patch.object(torch.nn.functional, "linear", _fake_linear))
