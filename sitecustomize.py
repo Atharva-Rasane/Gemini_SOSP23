@@ -111,6 +111,9 @@ def _install_fakegpu():
 
     orig_empty = torch.empty
     orig_empty_like = torch.empty_like
+    orig_where = torch.where
+    orig_pow = torch.pow
+    orig_clamp = torch.clamp
     dist_module = torch.distributed if hasattr(torch, "distributed") else None
     orig_dist_init_process_group = (
         dist_module.init_process_group if dist_module is not None else None
@@ -550,6 +553,183 @@ def _install_fakegpu():
             result.requires_grad_(any(torch.is_tensor(dep) and dep.requires_grad for dep in deps))
         return result
 
+    def _shape_of(value):
+        return tuple(value.shape) if torch.is_tensor(value) else ()
+
+    def _broadcast_shape(*shapes):
+        shapes = [tuple(shape) for shape in shapes if shape is not None]
+        if not shapes:
+            return ()
+        if hasattr(torch, "broadcast_shapes"):
+            return tuple(torch.broadcast_shapes(*shapes))
+
+        result = []
+        max_ndim = max(len(shape) for shape in shapes)
+        for offset in range(1, max_ndim + 1):
+            dim = 1
+            for shape in shapes:
+                candidate = shape[-offset] if offset <= len(shape) else 1
+                if candidate != 1:
+                    if dim not in (1, candidate):
+                        raise RuntimeError(f"shape mismatch: {shapes}")
+                    dim = candidate
+            result.append(dim)
+        return tuple(reversed(result))
+
+    def _dtype_from_values(*values, fallback=torch.float32):
+        for value in values:
+            if torch.is_tensor(value):
+                return value.dtype
+        return fallback
+
+    def _return_with_optional_out(result, out):
+        if out is not None:
+            _copy_tensor(out, result)
+            return out
+        return result
+
+    def _fake_addmm(input, mat1, mat2, *args, **kwargs):
+        out = kwargs.get("out")
+        shape = (mat1.shape[0], mat2.shape[1])
+        result = _fake_empty_with_dependency(
+            shape,
+            _dtype_from_values(input, mat1, mat2),
+            input,
+            mat1,
+            mat2,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _fake_mm(input, mat2, *args, **kwargs):
+        out = kwargs.get("out")
+        result = _fake_empty_with_dependency(
+            (input.shape[0], mat2.shape[1]),
+            _dtype_from_values(input, mat2),
+            input,
+            mat2,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _matmul_shape(input, other):
+        left = tuple(input.shape)
+        right = tuple(other.shape)
+        left_ndim = len(left)
+        right_ndim = len(right)
+
+        if left_ndim == 1 and right_ndim == 1:
+            return ()
+        if left_ndim == 1:
+            return _broadcast_shape((), right[:-2]) + (right[-1],)
+        if right_ndim == 1:
+            return _broadcast_shape(left[:-2], ()) + (left[-2],)
+        return _broadcast_shape(left[:-2], right[:-2]) + (left[-2], right[-1])
+
+    def _fake_matmul(input, other, *args, **kwargs):
+        out = kwargs.get("out")
+        result = _fake_empty_with_dependency(
+            _matmul_shape(input, other),
+            _dtype_from_values(input, other),
+            input,
+            other,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _fake_bmm(input, mat2, *args, **kwargs):
+        out = kwargs.get("out")
+        result = _fake_empty_with_dependency(
+            (input.shape[0], input.shape[1], mat2.shape[2]),
+            _dtype_from_values(input, mat2),
+            input,
+            mat2,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _fake_baddbmm(input, batch1, batch2, *args, **kwargs):
+        out = kwargs.get("out")
+        result = _fake_empty_with_dependency(
+            (batch1.shape[0], batch1.shape[1], batch2.shape[2]),
+            _dtype_from_values(input, batch1, batch2),
+            input,
+            batch1,
+            batch2,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _fake_addbmm(input, batch1, batch2, *args, **kwargs):
+        out = kwargs.get("out")
+        result = _fake_empty_with_dependency(
+            (batch1.shape[1], batch2.shape[2]),
+            _dtype_from_values(input, batch1, batch2),
+            input,
+            batch1,
+            batch2,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _fake_where(condition, input=None, other=None, *args, **kwargs):
+        if input is None and other is None:
+            return orig_where(condition)
+
+        out = kwargs.get("out")
+        result = _fake_empty_with_dependency(
+            _broadcast_shape(_shape_of(condition), _shape_of(input), _shape_of(other)),
+            _dtype_from_values(input, other),
+            input,
+            other,
+        )
+        return _return_with_optional_out(result, out)
+
+    def _fake_unary_torch_op(original):
+        def wrapped(input, *args, **kwargs):
+            if not torch.is_tensor(input):
+                return original(input, *args, **kwargs)
+            result = _fake_empty_with_dependency(input.shape, input.dtype, input)
+            return _return_with_optional_out(result, kwargs.get("out"))
+
+        return wrapped
+
+    def _fake_pow(input, exponent, *args, **kwargs):
+        if not torch.is_tensor(input) and not torch.is_tensor(exponent):
+            return orig_pow(input, exponent, *args, **kwargs)
+        shape = _broadcast_shape(_shape_of(input), _shape_of(exponent))
+        dtype = _dtype_from_values(input, exponent)
+        result = _fake_empty_with_dependency(shape, dtype, input, exponent)
+        return _return_with_optional_out(result, kwargs.get("out"))
+
+    def _fake_clamp(input, *args, **kwargs):
+        if not torch.is_tensor(input):
+            return orig_clamp(input, *args, **kwargs)
+        result = _fake_empty_with_dependency(input.shape, input.dtype, input)
+        return _return_with_optional_out(result, kwargs.get("out"))
+
+    def _fake_tensor_addmm(self, mat1, mat2, *args, **kwargs):
+        return _fake_addmm(self, mat1, mat2, *args, **kwargs)
+
+    def _fake_tensor_mm(self, mat2, *args, **kwargs):
+        return _fake_mm(self, mat2, *args, **kwargs)
+
+    def _fake_tensor_matmul(self, other, *args, **kwargs):
+        return _fake_matmul(self, other, *args, **kwargs)
+
+    def _fake_tensor_bmm(self, mat2, *args, **kwargs):
+        return _fake_bmm(self, mat2, *args, **kwargs)
+
+    def _fake_tensor_baddbmm(self, batch1, batch2, *args, **kwargs):
+        return _fake_baddbmm(self, batch1, batch2, *args, **kwargs)
+
+    def _fake_tensor_pow(self, exponent, *args, **kwargs):
+        return _fake_pow(self, exponent, *args, **kwargs)
+
+    def _fake_tensor_clamp(self, *args, **kwargs):
+        return _fake_clamp(self, *args, **kwargs)
+
+    def _fake_tensor_masked_fill(self, mask, value):
+        return _fake_empty_with_dependency(self.shape, self.dtype, self)
+
+    def _fake_tensor_masked_fill_(self, mask, value):
+        _copy_tensor(self, orig_empty_like(self))
+        return self
+
     def _fake_embedding(input, weight, *args, **kwargs):
         return _fake_empty_with_dependency(
             tuple(input.shape) + (weight.shape[-1],),
@@ -607,6 +787,15 @@ def _install_fakegpu():
     stack.enter_context(mock.patch.object(torch.Tensor, "is_cuda", property(lambda self: True)))
     stack.enter_context(mock.patch.object(torch.Tensor, "record_stream", _fake_tensor_record_stream))
     stack.enter_context(mock.patch.object(torch.Tensor, "pin_memory", _fake_tensor_pin_memory))
+    stack.enter_context(mock.patch.object(torch.Tensor, "addmm", _fake_tensor_addmm))
+    stack.enter_context(mock.patch.object(torch.Tensor, "mm", _fake_tensor_mm))
+    stack.enter_context(mock.patch.object(torch.Tensor, "matmul", _fake_tensor_matmul))
+    stack.enter_context(mock.patch.object(torch.Tensor, "bmm", _fake_tensor_bmm))
+    stack.enter_context(mock.patch.object(torch.Tensor, "baddbmm", _fake_tensor_baddbmm))
+    stack.enter_context(mock.patch.object(torch.Tensor, "pow", _fake_tensor_pow))
+    stack.enter_context(mock.patch.object(torch.Tensor, "clamp", _fake_tensor_clamp))
+    stack.enter_context(mock.patch.object(torch.Tensor, "masked_fill", _fake_tensor_masked_fill))
+    stack.enter_context(mock.patch.object(torch.Tensor, "masked_fill_", _fake_tensor_masked_fill_))
     stack.enter_context(mock.patch.object(torch.nn.Module, "cuda", _fake_module_cuda))
     stack.enter_context(mock.patch.object(torch.nn.Module, "to", _fake_module_to))
     stack.enter_context(mock.patch.object(torch, "load", _fake_torch_load))
@@ -640,6 +829,42 @@ def _install_fakegpu():
     stack.enter_context(mock.patch.object(torch.nn.functional, "softmax", _fake_activation_like))
     stack.enter_context(mock.patch.object(torch.nn.functional, "dropout", _fake_dropout))
     stack.enter_context(mock.patch.object(torch.nn.functional, "cross_entropy", _fake_cross_entropy))
+    for name in ["log_softmax", "softplus", "tanh", "sigmoid"]:
+        if hasattr(torch.nn.functional, name):
+            stack.enter_context(mock.patch.object(torch.nn.functional, name, _fake_activation_like))
+
+    for name, fake in [
+        ("addmm", _fake_addmm),
+        ("mm", _fake_mm),
+        ("matmul", _fake_matmul),
+        ("bmm", _fake_bmm),
+        ("baddbmm", _fake_baddbmm),
+        ("addbmm", _fake_addbmm),
+        ("where", _fake_where),
+        ("pow", _fake_pow),
+        ("clamp", _fake_clamp),
+        ("clip", _fake_clamp),
+    ]:
+        if hasattr(torch, name):
+            stack.enter_context(mock.patch.object(torch, name, fake))
+
+    for name in [
+        "tanh",
+        "sigmoid",
+        "exp",
+        "erf",
+        "sqrt",
+        "rsqrt",
+        "log",
+        "reciprocal",
+        "square",
+        "abs",
+        "neg",
+    ]:
+        if hasattr(torch, name):
+            stack.enter_context(
+                mock.patch.object(torch, name, _fake_unary_torch_op(getattr(torch, name)))
+            )
 
     for name in [
         "empty",
