@@ -8,9 +8,10 @@ this process or an ancestor launch command, or one of these variables is set:
     PCCHECK_FAKEGPU=1
     PYTHONPCCHECK_FAKEGPU=1
 
-The fake backend keeps tensors physically on CPU and redirects NCCL process
-groups to Gloo. CUDA-facing APIs are spoofed so existing DeepSpeed code can run
-without a GPU. Expensive model math is replaced with cheap, shape-correct zero
+The fake backend keeps tensors physically on CPU, hides all physical NVIDIA
+devices before PyTorch imports, and redirects NCCL process groups to Gloo.
+CUDA-facing APIs are spoofed so existing DeepSpeed code can run without GPU
+hardware or NVIDIA device nodes. Expensive model math is replaced with cheap, shape-correct zero
 placeholders that retain an autograd dependency on their inputs.
 
 Important design rule:
@@ -97,9 +98,21 @@ def _fakegpu_requested():
     requested = requested or os.environ.get(FAKEGPU_ENV) == "1"
     requested = requested or os.environ.get(FAKEGPU_EXPORT_ENV) == "1"
     requested = requested or _ancestor_requested_fakegpu()
+
     if requested:
         os.environ[FAKEGPU_ENV] = "1"
         os.environ[FAKEGPU_EXPORT_ENV] = "1"
+
+        # This runs before _install_fakegpu() imports torch. Hide physical
+        # NVIDIA devices before PyTorch or DeepSpeed can initialize a real CUDA
+        # context. Each Python worker re-applies this even if its launcher
+        # exported CUDA_VISIBLE_DEVICES=0.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        os.environ["NVIDIA_VISIBLE_DEVICES"] = "void"
+
+        # Avoid eager CUDA module loading where supported by the runtime.
+        os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+
     return requested
 
 
@@ -877,6 +890,14 @@ def _install_fakegpu():
     def _fake_set_rng_state(new_state, device=None):
         return torch.random.set_rng_state(new_state.cpu())
 
+    def _fake_cuda_init(*args, **kwargs):
+        # Never call torch._C._cuda_init(). The fake backend is CPU-only.
+        return None
+
+    def _fake_cuda_is_initialized():
+        # Report initialized so helpers do not attempt lazy CUDA setup.
+        return True
+
     fake_stream = FakeCudaStream()
 
     stack.enter_context(mock.patch.dict(os.environ, {FAKEGPU_ENV: "1"}))
@@ -1027,6 +1048,37 @@ def _install_fakegpu():
                 mock.patch.object(torch, name, _factory_wrapper(getattr(torch, name)))
             )
 
+    # Block normal Python-level routes to real CUDA initialization. A CUDA
+    # build of PyTorch may be installed, but no physical GPU or /dev/nvidia*
+    # device node is required.
+    if hasattr(torch.cuda, "init"):
+        stack.enter_context(
+            mock.patch.object(torch.cuda, "init", _fake_cuda_init)
+        )
+    if hasattr(torch.cuda, "_lazy_init"):
+        stack.enter_context(
+            mock.patch.object(torch.cuda, "_lazy_init", _fake_cuda_init)
+        )
+    if hasattr(torch.cuda, "_lazy_new"):
+        stack.enter_context(
+            mock.patch.object(torch.cuda, "_lazy_new", _fake_cuda_init)
+        )
+
+    # Some code can bypass torch.cuda._lazy_init and call the C-extension entry
+    # point. Replace it when this PyTorch build exposes a writable attribute.
+    try:
+        if hasattr(torch, "_C") and hasattr(torch._C, "_cuda_init"):
+            stack.enter_context(
+                mock.patch.object(torch._C, "_cuda_init", _fake_cuda_init)
+            )
+    except (AttributeError, TypeError):
+        pass
+
+    # Mark the fake CUDA layer as logically initialized only after all real
+    # initialization entry points have been replaced.
+    if hasattr(torch.cuda, "_initialized"):
+        torch.cuda._initialized = True
+
     stack.enter_context(mock.patch.object(torch.cuda, "is_available", return_value=True))
     stack.enter_context(mock.patch.object(torch.cuda, "device_count", return_value=1))
     stack.enter_context(mock.patch.object(torch.cuda, "current_device", return_value=0))
@@ -1089,7 +1141,11 @@ def _install_fakegpu():
 
     if hasattr(torch.cuda, "is_initialized"):
         stack.enter_context(
-            mock.patch.object(torch.cuda, "is_initialized", return_value=True)
+            mock.patch.object(
+                torch.cuda,
+                "is_initialized",
+                _fake_cuda_is_initialized,
+            )
         )
     if hasattr(torch.cuda, "is_bf16_supported"):
         stack.enter_context(
@@ -1109,6 +1165,26 @@ def _install_fakegpu():
                 torch.cuda,
                 "mem_get_info",
                 return_value=(80 * 1024**3, 80 * 1024**3),
+            )
+        )
+    if hasattr(torch.cuda, "ipc_collect"):
+        stack.enter_context(
+            mock.patch.object(torch.cuda, "ipc_collect", return_value=None)
+        )
+    if hasattr(torch.cuda, "can_device_access_peer"):
+        stack.enter_context(
+            mock.patch.object(
+                torch.cuda,
+                "can_device_access_peer",
+                return_value=False,
+            )
+        )
+    if hasattr(torch.cuda, "get_arch_list"):
+        stack.enter_context(
+            mock.patch.object(
+                torch.cuda,
+                "get_arch_list",
+                return_value=["sm_80"],
             )
         )
 
