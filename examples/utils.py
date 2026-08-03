@@ -130,6 +130,10 @@ def get_argument_parser():
                         type=int,
                         default=100,
                         help='Interval to print training details.')
+    parser.add_argument('--warmup_steps',
+                        type=int,
+                        default=10,
+                        help='Optimizer steps excluded from benchmark metrics.')
 
     parser.add_argument(
         '--data_path_prefix',

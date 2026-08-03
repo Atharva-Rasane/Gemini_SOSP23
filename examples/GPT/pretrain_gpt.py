@@ -10,8 +10,14 @@ import torch
 import torch.distributed as dist
 from torch.nn import Module
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
-from transformers import (DataCollatorForLanguageModeling, 
-                        GPT2Tokenizer, GPT2LMHeadModel, GPT2Config)
+from transformers import (
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+    GPT2Config,
+    GPT2LMHeadModel,
+    OPTConfig,
+    OPTForCausalLM,
+)
 
 
 sys.path.append('../')
@@ -162,7 +168,9 @@ def get_dataloader(args, tokenizer):
         collate_fn=CollatorForLMWrapper(
                 tokenizer=tokenizer,
                 device=torch.device(f"cuda:{args.local_rank}"),
-                max_length=512,
+                max_length=args.config.get(
+                    'model_config', args.config.get('gpt_config'))
+                    .get('sequence_length', 512),
                 mlm=False,
         ),
         sampler=DistributedSampler(
@@ -178,23 +186,44 @@ def get_dataloader(args, tokenizer):
 
 
 def get_model(args) -> Module:
-    model_config = args.config['gpt_config']
-    cfg = GPT2Config(
-        vocab_size=model_config['vocab_size'],
-        n_positions=model_config['max_position_embeddings'],
-        n_embd=model_config['embedding_dim'],
-        n_layer=model_config['num_hidden_layers'],
-        n_head=model_config['num_attention_heads'],
-        n_inner=model_config['intermediate_size'],
-        use_cache=False if model_config['gradient_checkpointing'] else True
-    )
+    model_config = args.config.get(
+        'model_config', args.config.get('gpt_config'))
+    model_family = model_config.get('model_family', 'gpt2')
+    if model_family == 'opt':
+        cfg = OPTConfig(
+            vocab_size=model_config['vocab_size'],
+            max_position_embeddings=model_config['max_position_embeddings'],
+            hidden_size=model_config['hidden_size'],
+            ffn_dim=model_config['intermediate_size'],
+            num_hidden_layers=model_config['num_hidden_layers'],
+            num_attention_heads=model_config['num_attention_heads'],
+            word_embed_proj_dim=model_config['word_embed_proj_dim'],
+            dropout=model_config['dropout'],
+            attention_dropout=model_config['attention_dropout'],
+            use_cache=False if model_config['gradient_checkpointing'] else True
+        )
+        model_class = OPTForCausalLM
+    elif model_family == 'gpt2':
+        cfg = GPT2Config(
+            vocab_size=model_config['vocab_size'],
+            n_positions=model_config['max_position_embeddings'],
+            n_embd=model_config['embedding_dim'],
+            n_layer=model_config['num_hidden_layers'],
+            n_head=model_config['num_attention_heads'],
+            n_inner=model_config['intermediate_size'],
+            use_cache=False if model_config['gradient_checkpointing'] else True
+        )
+        model_class = GPT2LMHeadModel
+    else:
+        raise ValueError(f"Unsupported model family: {model_family}")
 
     if args.config['zero_optimization']['stage'] == 3:
         with deepspeed.zero.Init(config=args.config):
-            model = GPT2LMHeadModel(cfg)
+            model = model_class(cfg)
     else:
-        model = GPT2LMHeadModel(cfg)
-    model.gradient_checkpointing_enable()
+        model = model_class(cfg)
+    if model_config['gradient_checkpointing']:
+        model.gradient_checkpointing_enable()
     time.sleep(2)
     print_at_rank0(model)
     print_at_rank0(f"model param size {count_parameters(model)/1e9} B")
@@ -205,16 +234,21 @@ def get_model(args) -> Module:
 
 def main():
     args = get_args()
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
     model = get_model(args)
     print_at_rank0(f"[total number of parameters] {count_parameters(model)}")
 
     cpu_snapshot, snapshot_settings, training_profiler, snapshot_profiler, comm_profiler = set_snapshot_settings(args)
     
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    model_config = args.config.get(
+        'model_config', args.config.get('gpt_config'))
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.get('tokenizer_name', 'gpt2'))
     tokenizer.pad_token = tokenizer.eos_token
     print_at_rank0(f'tokenizer vocab_size {tokenizer.vocab_size}'
-            f' config vocab size {args.config["gpt_config"]["vocab_size"]}')
-    assert tokenizer.vocab_size <= args.config["gpt_config"]["vocab_size"]
+            f' config vocab size {model_config["vocab_size"]}')
+    assert tokenizer.vocab_size <= model_config["vocab_size"]
     # get data_loader
     training_dataloader = get_dataloader(args, tokenizer)
 
@@ -240,6 +274,10 @@ def main():
                         last_global_step=global_step,
                         last_global_data_samples=global_data_samples)
 
+    measured_time = 0.0
+    measured_steps = 0
+    stall_time = 0.0
+    finished = False
     for e in range(10):
         snapshot_settings.set_global_epoch(e + 1)
         for n, inputs in enumerate(training_dataloader):
@@ -264,7 +302,24 @@ def main():
             step_time = time.time() - step_start
             print_at_rank0(f"[Training] step time: {step_time}")
             torch.cuda.empty_cache()
-            
+
+            checkpoint_stall = 0.0
+            if snapshot_settings.is_profile_mode():
+                checkpoint_stall = sum(snapshot_profiler.get_checkpoint_comm_time())
+            phase = "warmup" if global_step < args.warmup_steps else "measured"
+            if phase == "measured":
+                measured_time += step_time
+                measured_steps += 1
+                stall_time += checkpoint_stall
+            if dist.get_rank() == 0:
+                print("BENCHMARK_STEP " + json.dumps({
+                    "method": "gemini" if snapshot_settings.is_snapshot_mode() else "baseline",
+                    "step": global_step,
+                    "phase": phase,
+                    "step_time_s": step_time,
+                    "checkpoint_stall_s": checkpoint_stall,
+                }, sort_keys=True), flush=True)
+
             global_step += 1
             snapshot_settings.set_global_step(global_step)
             if dist.get_rank() == 0:
@@ -278,7 +333,31 @@ def main():
                 print_at_rank0(
                     f'Warning: Early training termination due to max steps limit, epoch={e+1}, global_step={global_step}'
                 )
-                return
+                finished = True
+                break
+        if finished:
+            break
+
+    finalize_stall = 0.0
+    if snapshot_settings.is_snapshot_mode():
+        finalize_started = time.time()
+        cpu_snapshot.save_optimizer_snapshot_to_disk()
+        cpu_snapshot.local_optimizer_state_dict = None
+        finalize_stall = time.time() - finalize_started
+        measured_time += finalize_stall
+        stall_time += finalize_stall
+
+    if dist.get_rank() == 0:
+        print("BENCHMARK_SUMMARY " + json.dumps({
+            "method": "gemini" if snapshot_settings.is_snapshot_mode() else "baseline",
+            "warmup_iterations": args.warmup_steps,
+            "measured_iterations": measured_steps,
+            "completion_time_s": measured_time,
+            "stall_time_s": stall_time,
+            "finalize_stall_s": finalize_stall,
+            "checkpoint_count": max(0, measured_steps),
+        }, sort_keys=True), flush=True)
+        print(f"EXECUTION TIME: {measured_time} sec", flush=True)
 
             
 

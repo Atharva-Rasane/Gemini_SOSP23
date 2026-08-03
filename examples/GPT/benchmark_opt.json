@@ -1,0 +1,45 @@
+{
+    "name": "benchmark_opt",
+    "gradient_accumulation_steps": 1,
+    "train_batch_size": 4,
+    "train_micro_batch_size_per_gpu": 1,
+    "steps_per_print": 1,
+    "prescale_gradients": false,
+    "model_config": {
+        "model_family": "opt",
+        "tokenizer_name": "facebook/opt-125m",
+        "vocab_size": 50272,
+        "max_position_embeddings": 128,
+        "num_attention_heads": 4,
+        "num_hidden_layers": 2,
+        "hidden_size": 128,
+        "intermediate_size": 512,
+        "word_embed_proj_dim": 128,
+        "dropout": 0.0,
+        "attention_dropout": 0.0,
+        "gradient_checkpointing": false,
+        "sequence_length": 64
+    },
+    "zero_optimization": {
+        "stage": 3,
+        "stage3_prefetch_bucket_size": 1000000,
+        "reduce_bucket_size": 1000000
+    },
+    "optimizer": {
+        "type": "Adam",
+        "params": {
+            "lr": 0.0001,
+            "weight_decay": 0.01,
+            "bias_correction": true,
+            "eps": 1e-06
+        }
+    },
+    "gradient_clipping": 1.0,
+    "wall_clock_breakdown": false,
+    "fp16": {
+        "enabled": true,
+        "loss_scale": 0,
+        "initial_scale_power": 1,
+        "loss_scale_window": 1000
+    }
+}
