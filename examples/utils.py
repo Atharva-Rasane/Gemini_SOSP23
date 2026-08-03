@@ -1,5 +1,6 @@
 import sys
 import argparse
+import os
 
 
 def get_argument_parser():
@@ -269,6 +270,9 @@ def set_snapshot_settings(args):
     snapshot_settings.set_profile_mode(args.enable_snapshot_profile)
     snapshot_settings.set_comm_profile_mode(args.enable_comm_profile)
     snapshot_settings.set_comm_profile_steps(args.comm_profile_steps)
+    os.makedirs(args.snapshot_path, exist_ok=True)
+    comm_profiler.set_profile_filename(
+        os.path.join(args.snapshot_path, "comm_gap.txt"))
     cpu_snapshot.set_checkpoint_setup(args)
     cpu_snapshot.set_snapshot_mode(snapshot_settings.get_snapshot_mode())
 

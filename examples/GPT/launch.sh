@@ -12,9 +12,12 @@ export PATH="${HOME}/.local/bin:${PATH}"
 HOSTFILE="${HOSTFILE:-${SCRIPT_DIR}/../hostfile}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-pretrain_gpt.py}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-tiny_gpt_template.json}"
+MASTER_ADDR="${MASTER_ADDR:-}"
+MASTER_PORT="${MASTER_PORT:-29500}"
 
 JOB_NAME="${JOB_NAME:-tiny_gpt}"
-OUTPUT_DIR="./${JOB_NAME}"
+OUTPUT_DIR="${OUTPUT_DIR:-${GEMINI_CHECKPOINT_DIR:-${SCRIPT_DIR}/${JOB_NAME}}/output}"
+SNAPSHOT_PATH="${SNAPSHOT_PATH:-${GEMINI_CHECKPOINT_DIR:-${SCRIPT_DIR}/${JOB_NAME}}/snapshot}"
 MAX_STEPS="${MAX_STEPS:-30}"
 PRINT_STEPS="${PRINT_STEPS:-1}"
 COMM_PROFILE_STEPS="${COMM_PROFILE_STEPS:-3}"
@@ -25,7 +28,9 @@ SNAPSHOT_BUFFER_SIZE="${SNAPSHOT_BUFFER_SIZE:-1}"
 SPAN_THRESHOLD="${SPAN_THRESHOLD:-100}"
 SPAN_ALPHA="${SPAN_ALPHA:-0.8}"
 MAX_BLOCKS_IN_SPAN="${MAX_BLOCKS_IN_SPAN:-1}"
-LOG_FILE="${LOG_FILE:-log_${JOB_NAME}}"
+LOG_FILE="${LOG_FILE:-${GEMINI_CHECKPOINT_DIR:-${SCRIPT_DIR}/${JOB_NAME}}/log_${JOB_NAME}}"
+
+mkdir -p "${OUTPUT_DIR}" "${SNAPSHOT_PATH}" "$(dirname "${LOG_FILE}")"
 
 if [ -n "${DEEPSPEED_BIN:-}" ]; then
     deepspeed="${DEEPSPEED_BIN}"
@@ -47,13 +52,14 @@ if [ ! -f "${HOSTFILE}" ]; then
 fi
 
 ds_cmd="\
-${deepspeed} --hostfile=${HOSTFILE} ${TRAIN_SCRIPT} \
+${deepspeed} --hostfile=${HOSTFILE} --master_port=${MASTER_PORT} ${MASTER_ADDR:+--master_addr=${MASTER_ADDR}} ${TRAIN_SCRIPT} \
 --deepspeed \
 --deepspeed_config $TRAIN_CONFIG \
 --job_name ${JOB_NAME} \
 --max_steps ${MAX_STEPS} \
 --print_steps ${PRINT_STEPS} \
---output . \
+--output_dir ${OUTPUT_DIR} \
+--snapshot_path ${SNAPSHOT_PATH} \
 --comm_profile_steps ${COMM_PROFILE_STEPS} \
 --jump_profile_lines ${JUMP_PROFILE_LINES} \
 --enable_comm_profile \
@@ -68,4 +74,4 @@ ${deepspeed} --hostfile=${HOSTFILE} ${TRAIN_SCRIPT} \
 "
 
 echo $ds_cmd
-eval $ds_cmd | tee ${LOG_FILE}
+eval $ds_cmd 2>&1 | tee ${LOG_FILE}
