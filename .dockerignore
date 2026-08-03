@@ -10,8 +10,6 @@
 **/.pytest_cache
 artifacts
 datasets
-snapshot
-snapshot_strategy
-**/snapshot
-**/snapshot_strategy
+examples/*/snapshot
+examples/*/snapshot_strategy
 **/log_*
