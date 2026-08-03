@@ -9,6 +9,17 @@ cd "${SCRIPT_DIR}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PATH="${HOME}/.local/bin:${PATH}"
 
+SSH_PORT="${SSH_PORT:-2223}"
+PDSH_SSH_ARGS_APPEND="${PDSH_SSH_ARGS_APPEND:--p ${SSH_PORT} -o StrictHostKeyChecking=no}"
+if [ -z "${NCCL_SOCKET_IFNAME:-}" ]; then
+    NCCL_SOCKET_IFNAME="$(awk '$2 == "00000000" { print $1; exit }' /proc/net/route)"
+fi
+if [ -z "$NCCL_SOCKET_IFNAME" ]; then
+    echo "Unable to detect the default network interface; set NCCL_SOCKET_IFNAME." >&2
+    exit 1
+fi
+export PDSH_RCMD_TYPE=ssh PDSH_SSH_ARGS_APPEND NCCL_SOCKET_IFNAME
+
 HOSTFILE="${HOSTFILE:-${SCRIPT_DIR}/../hostfile}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-pretrain_gpt.py}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-tiny_gpt_template.json}"
