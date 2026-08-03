@@ -2,6 +2,12 @@
 set -euo pipefail
 
 SSH_PORT="${SSH_PORT:-2223}"
+export SSH_PORT
+
+if [ -z "${PDSH_SSH_ARGS_APPEND:-}" ]; then
+    PDSH_SSH_ARGS_APPEND="-p ${SSH_PORT} -o StrictHostKeyChecking=no"
+fi
+export PDSH_SSH_ARGS_APPEND
 
 if [ -z "${NCCL_SOCKET_IFNAME:-}" ]; then
     NCCL_SOCKET_IFNAME="$(awk '$2 == "00000000" { print $1; exit }' /proc/net/route)"
