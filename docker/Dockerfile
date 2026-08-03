@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /workspace/gemini
 
 COPY requirements/requirements.txt requirements/requirements.txt
-RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+RUN python -m pip install --no-cache-dir --upgrade pip "setuptools<81" wheel \
     && python -m pip install --no-cache-dir -r requirements/requirements.txt \
     && python -m pip install --no-cache-dir "transformers==4.24.0" boto3 \
     && rm -rf /root/.cache/pip
