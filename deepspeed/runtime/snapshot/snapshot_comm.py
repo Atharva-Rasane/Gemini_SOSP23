@@ -160,7 +160,13 @@ class SnapshotOptimizer():
         tmp_file = f"tmp_checkpoint_{self.this_rank}.pt"
         torch.save(optimizer_state_dict, tmp_file)
 
-        self.snapshot_gpu_buffers = [torch.zeros(self.snapshot_buffer_size, dtype = self.dtype, device=torch.cuda.current_device())] * self.snapshot_gpu_versions
+        self.snapshot_gpu_buffers = [
+            torch.zeros(
+                self.snapshot_buffer_size,
+                dtype=self.dtype,
+                device=torch.cuda.current_device())
+            for _ in range(self.snapshot_gpu_versions)
+        ]
         # we use multiple versions in memory to store the checkpoints
         self.optimizer_state_dicts = [[] for _ in range(self.snapshot_versions)]
         self.optimizer_tensors = [[] for _ in range(self.snapshot_versions)]
@@ -303,9 +309,13 @@ class SnapshotOptimizer():
 
     @instrument_w_nvtx
     def remote_snapshot_blocks(self, blocks, event, stream):
+        remaining_blocks = self.total_blocks - self.cur_block_id
         if blocks == -1:
             # snapshot the all the left blocks
-            blocks = self.total_blocks - self.cur_block_id
+            blocks = remaining_blocks
+        else:
+            blocks = min(blocks, remaining_blocks)
+        if blocks <= 0:
             return
 
         with torch.cuda.stream(self.checkpoint_comm_stream):
@@ -438,7 +448,7 @@ class SnapshotOptimizer():
             torch.save(remote_zero_sd, remote_snapshot_filename)
             torch.cuda.synchronize()
             logger.info(f"""[Rank {self.this_rank}] save optimizer on CPU to disk \n
-                    snapshot filename: {local_snapshot_filename} \n
+                    snapshot filename: {remote_snapshot_filename} \n
                     Checkpoint size: {optimizer_size} MB \n
                     time: {time.time() - start_time}""")
             record = self.snapshot_record.construct_record(remote_snapshot_filename)
