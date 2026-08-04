@@ -41,6 +41,15 @@ docker run --rm --gpus all gemini-sosp23:cuda11.6 \
 
 The build context must be the repository root, not `docker/`.
 
+For the dual-job trace experiment, `Dockerfile.trace` is a small overlay on the
+already-built benchmark image. It copies only the passively instrumented
+training entry point and the two-rank workload configuration; model data and
+snapshots remain mounted at runtime:
+
+```bash
+docker build -f docker/Dockerfile.trace -t gemini-sosp23:dual-trace .
+```
+
 ## Push to the existing Artifact Registry repository
 
 ```bash

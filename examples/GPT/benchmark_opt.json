@@ -1,7 +1,7 @@
 {
     "name": "benchmark_opt",
     "gradient_accumulation_steps": 1,
-    "train_batch_size": 4,
+    "train_batch_size": 2,
     "train_micro_batch_size_per_gpu": 1,
     "steps_per_print": 1,
     "prescale_gradients": false,

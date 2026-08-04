@@ -1,0 +1,8 @@
+ARG BASE_IMAGE=us-central1-docker.pkg.dev/gbc-oit-rc-basil-app-bo/cloud-run-source-deploy/gemini-sosp23:benchmark-e7a1c92
+FROM ${BASE_IMAGE}
+
+COPY examples/GPT/pretrain_gpt.py /workspace/gemini/examples/GPT/pretrain_gpt.py
+COPY examples/GPT/benchmark_opt.json /workspace/gemini/examples/GPT/benchmark_opt.json
+COPY docker/entrypoint.sh /usr/local/bin/gemini-entrypoint
+
+RUN chmod 0755 /usr/local/bin/gemini-entrypoint

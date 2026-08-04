@@ -29,6 +29,28 @@ global_data_samples = 0
 last_global_step_from_restore = 0
 
 
+def trace_event(event, state, step=-1, phase="setup", **details):
+    """Emit a compact, cross-node event consumed by the experiment visualizer."""
+    rank = dist.get_rank() if dist.is_initialized() else int(os.environ.get("RANK", -1))
+    gpu_slot = int(os.environ.get("TRACE_GPU_SLOT", 0))
+    payload = {
+        "ts_ns": time.time_ns(),
+        "clock": "unix_epoch_ns",
+        "event": event,
+        "state": state,
+        "framework": "gemini",
+        "job": os.environ.get("TRACE_JOB_ID", "job"),
+        "rank": rank,
+        "node": f"node{rank}" if rank >= 0 else "setup",
+        "gpu": f"node{rank}gpu{gpu_slot}" if rank >= 0 else f"gpu{gpu_slot}",
+        "pid": os.getpid(),
+        "step": step,
+        "phase": phase,
+    }
+    payload.update(details)
+    print("TRACE_EVENT " + json.dumps(payload, sort_keys=True), flush=True)
+
+
 def count_parameters(model):
     return sum(p.ds_numel for p in model.parameters())
 
@@ -238,6 +260,7 @@ def main():
     # Initialize distributed first so zero.Init observes the real world size
     # instead of treating each rank as a single-process job.
     deepspeed.init_distributed()
+    trace_event("process", "B")
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     model = get_model(args)
@@ -287,22 +310,34 @@ def main():
         for n, inputs in enumerate(training_dataloader):
             if n < 5 and e < 1:
                 print_at_rank0(f"{[inputs[k].size() for k in inputs]}")
+            phase = "warmup" if global_step < args.warmup_steps else "measured"
+            trace_event("iteration", "B", global_step, phase)
+            trace_event("cuda_sync", "B", global_step, phase)
             torch.cuda.synchronize()
+            trace_event("cuda_sync", "E", global_step, phase)
             step_start = time.time()
 
+            trace_event("forward", "B", global_step, phase)
             outputs = model(input_ids=inputs['input_ids'],
                             attention_mask=inputs['attention_mask'],
                             labels=inputs["input_ids"])
+            trace_event("forward", "E", global_step, phase)
             loss = outputs.loss
-            model.backward(loss) 
+            trace_event("backward_gradient_sync", "B", global_step, phase)
+            model.backward(loss)
+            trace_event("backward_gradient_sync", "E", global_step, phase)
+            trace_event("optimizer_snapshot", "B", global_step, phase)
             model.step()
+            trace_event("optimizer_snapshot", "E", global_step, phase)
             
             if model.is_gradient_accumulation_boundary():
                 print_at_rank0(f"{e} {n}, LOSS: {loss.item()}")
 
             loss = None
 
+            trace_event("cuda_sync", "B", global_step, phase)
             torch.cuda.synchronize()
+            trace_event("cuda_sync", "E", global_step, phase)
             step_time = time.time() - step_start
             print_at_rank0(f"[Training] step time: {step_time}")
             torch.cuda.empty_cache()
@@ -310,7 +345,6 @@ def main():
             checkpoint_stall = 0.0
             if snapshot_settings.is_profile_mode():
                 checkpoint_stall = sum(snapshot_profiler.get_checkpoint_comm_time())
-            phase = "warmup" if global_step < args.warmup_steps else "measured"
             if phase == "measured":
                 measured_time += step_time
                 measured_steps += 1
@@ -333,6 +367,8 @@ def main():
                     snapshot_profiler.reset()
                 comm_profiler.profile_comm_time_gap()
 
+            trace_event("iteration", "E", global_step, phase)
+
             if is_time_to_exit(args=args, global_steps=global_step):
                 print_at_rank0(
                     f'Warning: Early training termination due to max steps limit, epoch={e+1}, global_step={global_step}'
@@ -344,12 +380,14 @@ def main():
 
     finalize_stall = 0.0
     if snapshot_settings.is_snapshot_mode():
+        trace_event("checkpoint_finalize", "B", global_step, "finalize")
         finalize_started = time.time()
         cpu_snapshot.save_optimizer_snapshot_to_disk()
         cpu_snapshot.local_optimizer_state_dict = None
         finalize_stall = time.time() - finalize_started
         measured_time += finalize_stall
         stall_time += finalize_stall
+        trace_event("checkpoint_finalize", "E", global_step, "finalize")
 
     if dist.get_rank() == 0:
         print("BENCHMARK_SUMMARY " + json.dumps({
@@ -362,6 +400,8 @@ def main():
             "checkpoint_count": measured_steps if snapshot_settings.is_snapshot_mode() else 0,
         }, sort_keys=True), flush=True)
         print(f"EXECUTION TIME: {measured_time} sec", flush=True)
+
+    trace_event("process", "E", global_step, "finalize")
 
             
 
