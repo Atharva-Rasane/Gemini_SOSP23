@@ -359,7 +359,7 @@ def main():
             "completion_time_s": measured_time,
             "stall_time_s": stall_time,
             "finalize_stall_s": finalize_stall,
-            "checkpoint_count": max(0, measured_steps),
+            "checkpoint_count": measured_steps if snapshot_settings.is_snapshot_mode() else 0,
         }, sort_keys=True), flush=True)
         print(f"EXECUTION TIME: {measured_time} sec", flush=True)
 
