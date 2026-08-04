@@ -234,6 +234,10 @@ def get_model(args) -> Module:
 
 def main():
     args = get_args()
+    # ZeRO-3 validates the global batch size while constructing the model.
+    # Initialize distributed first so zero.Init observes the real world size
+    # instead of treating each rank as a single-process job.
+    deepspeed.init_distributed()
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     model = get_model(args)
