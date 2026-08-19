@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from cpu.gemini_stream_compat import GeminiAsyncCopyCompat
 from cpu.gpu_compat import CpuGpuCompat, TimingProfile
 
 
@@ -52,52 +53,58 @@ def worker(rank, port, nbytes, trace_dir, queue):
             strict_timing=True,
             trace_path=trace,
         ) as runtime:
-            torch_dist.init_process_group(
-                backend="gloo", rank=rank, world_size=2
-            )
+            # Gemini depends on a nonblocking D2H copy stream. Install the
+            # Gemini-only async copy surrogate before importing snapshot_comm,
+            # because snapshot_comm captures `Stream` at import time.
+            with GeminiAsyncCopyCompat(runtime):
+                torch_dist.init_process_group(
+                    backend="gloo", rank=rank, world_size=2
+                )
 
-            # Import after installing the shim because Gemini does
-            # `from torch.cuda import Stream` at module import time.
-            from deepspeed.runtime.snapshot import snapshot_comm as sc
+                from deepspeed.runtime.snapshot import snapshot_comm as sc
 
-            peer = 1 - rank
-            local_state = torch.full(
-                (numel,), float(rank + 1), dtype=torch.float32
-            ).cuda()
-            recv_device = torch.empty(
-                numel, dtype=torch.float32, device="cuda"
-            )
-            remote_host = torch.empty(
-                numel, dtype=torch.float32, device="cpu"
-            )
+                peer = 1 - rank
+                local_state = torch.full(
+                    (numel,), float(rank + 1), dtype=torch.float32
+                ).cuda()
+                recv_device = torch.empty(
+                    numel, dtype=torch.float32, device="cuda"
+                )
+                remote_host = torch.empty(
+                    numel, dtype=torch.float32, device="cpu"
+                )
 
-            assert runtime.is_device_surrogate(local_state)
-            assert runtime.is_device_surrogate(recv_device)
-            assert not runtime.is_device_surrogate(remote_host)
+                assert runtime.is_device_surrogate(local_state)
+                assert runtime.is_device_surrogate(recv_device)
+                assert not runtime.is_device_surrogate(remote_host)
 
-            opt = sc.SnapshotOptimizer(group_size=2, dtype=torch.float32)
-            opt.snapshot_group = PeerGroup(peer)
-            opt.snapshot_gpu_buffers = [recv_device]
-            opt.snapshot_gpu_versions = 1
-            opt.snapshot_gpu_buffer_id = 0
-            opt.cur_block_id = 0
-            opt.snapshot_current_version = 0
-            opt.snapshot_versions = 1
-            opt.block_sizes = [[numel]]
-            opt.tensor_blocks = [[remote_host]]
+                opt = sc.SnapshotOptimizer(group_size=2, dtype=torch.float32)
+                opt.snapshot_group = PeerGroup(peer)
+                opt.snapshot_gpu_buffers = [recv_device]
+                opt.snapshot_gpu_versions = 1
+                opt.snapshot_gpu_buffer_id = 0
+                opt.cur_block_id = 0
+                opt.snapshot_current_version = 0
+                opt.snapshot_versions = 1
+                opt.block_sizes = [[numel]]
+                opt.tensor_blocks = [[remote_host]]
 
-            # DeepSpeed's comm wrapper is not initialized by this focused
-            # unit test. The rank read is patched, but Gemini's actual
-            # torch.distributed P2P calls remain real Gloo operations.
-            with mock.patch.object(sc.dist, "get_rank", return_value=rank):
-                opt.snapshot(local_state)
+                # DeepSpeed's comm wrapper is not initialized by this focused
+                # test. Only its rank query is patched; Gemini's original
+                # torch.distributed batch_isend_irecv remains real Gloo P2P.
+                with mock.patch.object(sc.dist, "get_rank", return_value=rank):
+                    opt.snapshot(local_state)
 
-            expected = torch.full(
-                (numel,), float(peer + 1), dtype=torch.float32
-            )
-            assert torch.equal(remote_host, expected)
-            torch_dist.barrier()
-            torch_dist.destroy_process_group()
+                # The original Gemini move_to_cpu(..., non_blocking=True) may
+                # return before its copy stream completes. Synchronize exactly
+                # where a consumer needs the remote DRAM checkpoint contents.
+                torch.cuda.synchronize()
+                expected = torch.full(
+                    (numel,), float(peer + 1), dtype=torch.float32
+                )
+                assert torch.equal(remote_host, expected)
+                torch_dist.barrier()
+                torch_dist.destroy_process_group()
 
         queue.put({"rank": rank, "ok": True})
     except BaseException as exc:
@@ -143,7 +150,8 @@ def run_test(size_mb):
             p.join(120)
         for p in processes:
             if p.is_alive():
-                p.terminate(); p.join()
+                p.terminate()
+                p.join()
                 raise RuntimeError("Gemini CPU unit test timed out")
 
         results = [queue.get(timeout=5) for _ in range(2)]
@@ -163,6 +171,7 @@ def run_test(size_mb):
         print("original_path=SnapshotOptimizer.snapshot")
         print(f"real_p2p_bytes_per_rank={nbytes}")
         print(f"real_d2h_surrogate_bytes_per_rank={nbytes}")
+        print("d2h_copy_semantics=nonblocking fake copy stream")
         print("remote_checkpoint_location=separate CPU DRAM buffer")
 
 
