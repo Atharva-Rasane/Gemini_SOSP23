@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two-rank CPU test of Gemini's original SnapshotOptimizer.snapshot() path."""
+"""Two-rank CPU test of Gemini's original remote snapshot path."""
 from __future__ import annotations
 
 import argparse
@@ -38,14 +38,23 @@ def free_port():
         return int(s.getsockname()[1])
 
 
-def worker(rank, port, nbytes, trace_dir, queue):
+def worker(rank, port, nbytes, blocks, trace_dir, queue):
     try:
         os.environ["MASTER_ADDR"] = "127.0.0.1"
         os.environ["MASTER_PORT"] = str(port)
-        numel = nbytes // 4
+        total_numel = nbytes // 4
+        if total_numel % blocks:
+            raise ValueError("float32 element count must divide evenly into blocks")
+        block_numel = total_numel // blocks
+        block_bytes = block_numel * 4
+
         profile = TimingProfile(
             source="synthetic-unit-test-only",
-            targets={("h2d", nbytes): 0.0, ("d2h", nbytes): 0.0},
+            targets={
+                ("h2d", nbytes): 0.0,
+                ("h2d", block_bytes): 0.0,
+                ("d2h", block_bytes): 0.0,
+            },
         )
         trace = str(Path(trace_dir) / f"rank{rank}.jsonl")
         with CpuGpuCompat(
@@ -65,42 +74,56 @@ def worker(rank, port, nbytes, trace_dir, queue):
 
                 peer = 1 - rank
                 local_state = torch.full(
-                    (numel,), float(rank + 1), dtype=torch.float32
+                    (total_numel,), float(rank + 1), dtype=torch.float32
                 ).cuda()
-                recv_device = torch.empty(
-                    numel, dtype=torch.float32, device="cuda"
-                )
                 remote_host = torch.empty(
-                    numel, dtype=torch.float32, device="cpu"
+                    total_numel, dtype=torch.float32, device="cpu"
                 )
+                recv_buffers = [
+                    torch.empty(block_numel, dtype=torch.float32, device="cuda")
+                    for _ in range(2)
+                ]
 
                 assert runtime.is_device_surrogate(local_state)
-                assert runtime.is_device_surrogate(recv_device)
+                assert all(runtime.is_device_surrogate(x) for x in recv_buffers)
                 assert not runtime.is_device_surrogate(remote_host)
 
                 opt = sc.SnapshotOptimizer(group_size=2, dtype=torch.float32)
                 opt.snapshot_group = PeerGroup(peer)
-                opt.snapshot_gpu_buffers = [recv_device]
-                opt.snapshot_gpu_versions = 1
+                opt.snapshot_gpu_buffers = recv_buffers
+                opt.snapshot_gpu_versions = len(recv_buffers)
                 opt.snapshot_gpu_buffer_id = 0
                 opt.cur_block_id = 0
                 opt.snapshot_current_version = 0
                 opt.snapshot_versions = 1
-                opt.block_sizes = [[numel]]
-                opt.tensor_blocks = [[remote_host]]
+                opt.snapshot_blocks = [
+                    local_state[i * block_numel:(i + 1) * block_numel]
+                    for i in range(blocks)
+                ]
+                opt.total_blocks = blocks
+                opt.block_sizes = [[block_numel for _ in range(blocks)]]
+                opt.tensor_blocks = [[
+                    remote_host[i * block_numel:(i + 1) * block_numel]
+                    for i in range(blocks)
+                ]]
+                opt.comm_gap_id = 0
+                opt.allgather_gap_num = -1
+                training_stream = torch.cuda.Stream()
 
                 # DeepSpeed's comm wrapper is not initialized by this focused
-                # test. Only its rank query is patched; Gemini's original
-                # torch.distributed batch_isend_irecv remains real Gloo P2P.
-                with mock.patch.object(sc.dist, "get_rank", return_value=rank):
-                    opt.snapshot(local_state)
+                # test. Only its rank/profile queries are patched. Gemini's
+                # original torch.distributed batch_isend_irecv stays real Gloo.
+                with mock.patch.object(sc.dist, "get_rank", return_value=rank), \
+                     mock.patch.object(sc.snapshot_settings, "is_profile_mode", return_value=False):
+                    opt.remote_snapshot_blocks(blocks, event=None, stream=training_stream)
 
-                # The original Gemini move_to_cpu(..., non_blocking=True) may
-                # return before its copy stream completes. Synchronize exactly
-                # where a consumer needs the remote DRAM checkpoint contents.
+                assert opt.cur_block_id == blocks
+
+                # The D2H copy stream is intentionally asynchronous. A consumer
+                # of the remote DRAM checkpoint must synchronize before reading.
                 torch.cuda.synchronize()
                 expected = torch.full(
-                    (numel,), float(peer + 1), dtype=torch.float32
+                    (total_numel,), float(peer + 1), dtype=torch.float32
                 )
                 assert torch.equal(remote_host, expected)
                 torch_dist.barrier()
@@ -121,19 +144,22 @@ def worker(rank, port, nbytes, trace_dir, queue):
         })
 
 
-def d2h_bytes(path):
+def transfer_bytes(path, kind):
     total = 0
     for line in Path(path).read_text().splitlines():
         row = json.loads(line)
-        if row.get("event") == "transfer" and row.get("kind") == "d2h":
+        if row.get("event") == "transfer" and row.get("kind") == kind:
             total += int(row.get("bytes", 0))
     return total
 
 
-def run_test(size_mb):
+def run_test(size_mb, blocks):
     nbytes = int(size_mb) * 1024 * 1024
+    blocks = int(blocks)
     if nbytes <= 0 or nbytes % 4:
         raise ValueError("size must be positive and float32 aligned")
+    if blocks <= 0 or (nbytes // 4) % blocks:
+        raise ValueError("blocks must divide the float32 element count exactly")
 
     ctx = mp.get_context("spawn")
     queue = ctx.Queue()
@@ -141,7 +167,7 @@ def run_test(size_mb):
 
     with tempfile.TemporaryDirectory(prefix="gemini-cpu-") as td:
         processes = [
-            ctx.Process(target=worker, args=(rank, port, nbytes, td, queue))
+            ctx.Process(target=worker, args=(rank, port, nbytes, blocks, td, queue))
             for rank in range(2)
         ]
         for p in processes:
@@ -163,13 +189,14 @@ def run_test(size_mb):
             ))
 
         for rank in range(2):
-            assert d2h_bytes(Path(td) / f"rank{rank}.jsonl") >= nbytes
+            assert transfer_bytes(Path(td) / f"rank{rank}.jsonl", "d2h") >= nbytes
 
         print("PASS Gemini CPU compatibility")
         print("ranks=2 backend=gloo")
-        print(f"checkpoint_block_bytes={nbytes}")
-        print("original_path=SnapshotOptimizer.snapshot")
-        print(f"real_p2p_bytes_per_rank={nbytes}")
+        print(f"checkpoint_bytes={nbytes}")
+        print(f"blocks={blocks} block_bytes={nbytes // blocks}")
+        print("original_path=SnapshotOptimizer.remote_snapshot_blocks -> snapshot_block -> snapshot")
+        print(f"real_p2p_payload_bytes_per_rank={nbytes}")
         print(f"real_d2h_surrogate_bytes_per_rank={nbytes}")
         print("d2h_copy_semantics=nonblocking fake copy stream")
         print("remote_checkpoint_location=separate CPU DRAM buffer")
@@ -178,8 +205,9 @@ def run_test(size_mb):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--size-mb", type=int, default=1)
+    parser.add_argument("--blocks", type=int, default=4)
     args = parser.parse_args()
-    run_test(args.size_mb)
+    run_test(args.size_mb, args.blocks)
 
 
 if __name__ == "__main__":
