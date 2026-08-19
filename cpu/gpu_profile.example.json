@@ -1,0 +1,12 @@
+{
+  "source": "synthetic-unit-test-only; replace with measured GPU capture",
+  "transfers": {
+    "d2h": [
+      {"bytes": 1048576, "target_s": 0.0}
+    ],
+    "h2d": [
+      {"bytes": 1048576, "target_s": 0.0}
+    ],
+    "d2d": []
+  }
+}
