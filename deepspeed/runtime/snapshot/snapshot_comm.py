@@ -62,9 +62,9 @@ def _snapshot_torch_p2p_fn(input_tensor: Tensor,
 
     # the performance of P2POp is very bad when G5 instances are used. what the fucc!
     ops = []
-    send_op = torch.distributed.P2POp(torch.distributed.isend, input_tensor, peer_rank)
+    send_op = torch.distributed.P2POp(torch.distributed.isend, input_tensor, peer_rank, group=snapshot_group.get_snapshot_group())
     ops.append(send_op)
-    recv_op = torch.distributed.P2POp(torch.distributed.irecv, output_tensor, peer_rank)
+    recv_op = torch.distributed.P2POp(torch.distributed.irecv, output_tensor, peer_rank, group=snapshot_group.get_snapshot_group())
     ops.append(recv_op)
     reqs = torch.distributed.batch_isend_irecv(ops)
     for req in reqs:
